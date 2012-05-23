@@ -5,3 +5,4 @@
 *.a
 *.lo
 *.slo
+src/snapshot_gen.c
