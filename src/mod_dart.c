@@ -20,11 +20,7 @@ static bool IsolateCreate(const char* name, void* data, char** error) {
   if (!isolate) return false;
   Dart_EnterScope();
   Builtin::SetNativeResolver(Builtin::kBuiltinLibrary);
-  Builtin::SetNativeResolver(Builtin::kCryptoLibrary);
   Builtin::SetNativeResolver(Builtin::kIOLibrary);
-  Builtin::SetNativeResolver(Builtin::kJsonLibrary);
-  Builtin::SetNativeResolver(Builtin::kUriLibrary);
-  Builtin::SetNativeResolver(Builtin::kUtfLibrary);
   return true;
 }
 
@@ -37,7 +33,41 @@ static Dart_Handle LoadFile(Dart_Handle path) {
   const char* cpath;
   Dart_Handle result = Dart_StringToCString(path, &cpath);
   if (Dart_IsError(result)) return result;
-  return Dart_NewString("quick brown fox!");
+
+  struct stat status;
+  if (stat(cpath, &status)) return Dart_Error("Couldn't stat %s: %s", cpath, strerror(errno));
+
+  char *bytes = (char*) malloc(status.st_size + 1);
+  if (!bytes) return Dart_Error("Failed to malloc %d bytes for %s: %s", status.st_size, cpath, strerror(errno));
+
+  FILE *fh = fopen(cpath, "r");
+  if (!fh) {
+    free(bytes);
+    return Dart_Error("Failed to open %s for read: %s", cpath, strerror(errno));
+  }
+
+  int total = 0, r;
+  while (total < status.st_size) {
+    r = fread(&(bytes[total]), 1, status.st_size - total + 1, fh);
+    if (r == 0) {
+      free(bytes);
+      fclose(fh);
+      return Dart_Error("File was shorter: %s expected %d got %d", cpath, status.st_size, total);
+    }
+    total += r;
+  }
+
+  if (!feof(fh) || total > status.st_size) {
+    free(bytes);
+    fclose(fh);
+    return Dart_Error("File was longer: %s expected %d", cpath, status.st_size);
+  }
+
+  fclose(fh);
+  bytes[status.st_size] = 0;
+  result = Dart_NewString(bytes);
+  free(bytes);
+  return result;
 }
 
 static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, Dart_Handle url, Dart_Handle import_map) {
@@ -47,20 +77,6 @@ static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, 
   if (Dart_IsError(source)) return source;
   if (type == kImportTag) return Dart_LoadLibrary(url, source, import_map);
   return Dart_LoadSource(library, url, source);
-}
-
-static bool dart_vm_init(request_rec *r) {
-  // TODO threadsafe
-  static int initialized = 0;
-  static int initializeState = 0;
-  if (initialized) {
-    if (!initializeState) AP_WARN(r, "Previously failed to initialize dart VM");
-    return initializeState;
-  }
-  initialized = 1;
-  initializeState = Dart_SetVMFlags(0, NULL) && Dart_Initialize(IsolateCreate, IsolateInterrupt);
-  if (!initializeState) AP_WARN(r, "Failed to initialize dart VM");
-  return initializeState;
 }
 
 static bool dart_isolate_create(request_rec *r) {
@@ -80,14 +96,22 @@ static void dart_isolate_destroy(request_rec *r) {
 }
 
 static Dart_Handle dart_library_create(request_rec *r) {
-  return Dart_LoadScript(Dart_NewString("main"), Dart_NewString("#import('dart:io');\nmain() => stdout.writeString('hello\\n');"), Dart_Null());
+  return Dart_LoadScript(Dart_NewString("main"), Dart_NewString("#import('dart:apache'); main() => sayhello();"), Dart_Null());
+}
+
+static bool initializeState = false;
+static void dart_child_init(apr_pool_t *p, server_rec *s) {
+  initializeState = Dart_SetVMFlags(0, NULL) && Dart_Initialize(IsolateCreate, IsolateInterrupt);
 }
 
 static int dart_handler(request_rec *r) {
   if (strcmp(r->handler, "dart")) {
     return DECLINED;
   }
-  if (!dart_vm_init(r)) return HTTP_INTERNAL_SERVER_ERROR;
+  if (!initializeState) {
+    AP_WARN(r, "Failed to initialize dart VM");  
+    return HTTP_INTERNAL_SERVER_ERROR;
+  }
   if (!dart_isolate_create(r)) return HTTP_INTERNAL_SERVER_ERROR;
   Dart_Handle library = dart_library_create(r);
   if (Dart_IsError(library)) {
@@ -113,6 +137,7 @@ static int dart_handler(request_rec *r) {
 
 static void dart_register_hooks(apr_pool_t *p) {
   ap_hook_handler(dart_handler, NULL, NULL, APR_HOOK_MIDDLE);
+  ap_hook_child_init(dart_child_init, NULL, NULL, APR_HOOK_MIDDLE);
 }
 
 /* Dispatch list for API hooks */
