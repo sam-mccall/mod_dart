@@ -15,6 +15,7 @@
 
 #define AP_WARN(r, message, ...) ap_log_error(APLOG_MARK, LOG_WARNING, 0, (r)->server, message "\n", ##__VA_ARGS__)
 extern Dart_Handle LoadFile(const char* cpath);
+extern const char *mod_dart_source;
 
 static void Throw(const char* library, const char* exception, const char* message) {
   Dart_Handle lib = Dart_LookupLibrary(Dart_NewString(library));
@@ -318,9 +319,7 @@ static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
 }
 
 static Dart_Handle ApacheLibraryLoad() {
-  Dart_Handle source = LoadFile("/usr/local/google/home/sammccall/gits/mod_dart/src/mod_dart.dart"); // TODO
-  if (Dart_IsError(source)) return source;
-  Dart_Handle library = Dart_LoadLibrary(Dart_NewString("dart:apache"), source, Dart_Null());
+  Dart_Handle library = Dart_LoadLibrary(Dart_NewString("dart:apache"), Dart_NewString(mod_dart_source));
   if (Dart_IsError(library)) return library;
 
   Dart_Handle wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("RequestNative"), 1);

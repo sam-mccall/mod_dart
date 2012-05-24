@@ -6,3 +6,4 @@
 *.lo
 *.slo
 src/snapshot_gen.c
+src/mod_dart_gen.c

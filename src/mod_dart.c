@@ -2,6 +2,8 @@
 #define NDEBUG
 #endif
 
+#include <sys/stat.h>
+
 #include "include/dart_api.h"
 #include "bin/builtin.h"
 
@@ -28,8 +30,8 @@ typedef struct dart_config {
 extern module AP_MODULE_DECLARE_DATA dart_module;
 extern "C" Dart_Handle ApacheLibraryInit(request_rec* r);
 
-static bool IsolateCreate(const char* name, void* data, char** error) {
-  Dart_Isolate isolate = Dart_CreateIsolate(name, snapshot_buffer, data, error);
+static bool IsolateCreate(const char* name, const char* main, void* data, char** error) {
+  Dart_Isolate isolate = Dart_CreateIsolate(name, main, snapshot_buffer, data, error);
   if (!isolate) return false;
   Dart_EnterScope();
   Builtin::SetNativeResolver(Builtin::kBuiltinLibrary);
@@ -84,7 +86,7 @@ Dart_Handle LoadFile(const char* cpath) {
   return result;
 }
 
-static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, Dart_Handle url, Dart_Handle import_map) {
+static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, Dart_Handle url) {
   if (type == kCanonicalizeUrl) return url;
   if (type == kLibraryTag) return Dart_Null();
 
@@ -100,12 +102,12 @@ static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, 
 
   if (Dart_IsError(source)) return source;
   if (type == kSourceTag) return Dart_LoadSource(library, url, source);
-  return Dart_LoadLibrary(url, source, import_map);
+  return Dart_LoadLibrary(url, source);
 }
 
 static bool dart_isolate_create(request_rec *r) {
   char* error;
-  if (!IsolateCreate("name", NULL, &error)) {
+  if (!IsolateCreate("name", "main", NULL, &error)) {
     AP_WARN(r, "Failed to create isolate: %s", error);
     return false;
   }
@@ -145,7 +147,7 @@ static int dart_handler(request_rec *r) {
   if (!dart_isolate_create(r)) return HTTP_INTERNAL_SERVER_ERROR;
   Dart_Handle script = LoadFile(r->filename);
   if (Dart_IsNull(script)) return HTTP_NOT_FOUND;
-  Dart_Handle library = Dart_IsError(script) ? script : Dart_LoadScript(Dart_NewString("main"), script, Dart_Null());
+  Dart_Handle library = Dart_IsError(script) ? script : Dart_LoadScript(Dart_NewString("main"), script);
   if (Dart_IsError(library)) {
     AP_WARN(r, "Failed to load library: %s", Dart_GetError(library));
     if (!isDebug(r)) {
