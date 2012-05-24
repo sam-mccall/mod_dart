@@ -218,4 +218,3 @@ module AP_MODULE_DECLARE_DATA dart_module = {
   dart_directives,          /* table of config file commands     */
   dart_register_hooks  /* register hooks            */
 };
-

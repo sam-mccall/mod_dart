@@ -34,6 +34,13 @@ static request_rec *get_request(Dart_Handle request) {
   return (request_rec*) rptr;
 }
 
+static apr_table_t *get_table(Dart_Handle headers) {
+  intptr_t tptr;
+  Dart_GetNativeInstanceField(headers, 0, &tptr);
+  if (!tptr) Throw("dart:core", "Exception", "headers.apr_table was NULL!");
+  return (apr_table_t*) tptr;
+}
+
 static void ThrowIfError(int code, const char* name, request_rec *r) {
   if (code) {
     char buf[1024];
@@ -68,11 +75,158 @@ static void Apache_Request_Flush(Dart_NativeArguments arguments) {
   Dart_ExitScope();
 }
 
+static void Apache_Request_GetHost(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewString(r->hostname ? r->hostname
+    : r->connection->local_host ? r->connection->local_host
+    : r->connection->local_ip ? r->connection->local_ip : "localhost"));
+  Dart_ExitScope();
+}
+
+static void Apache_Request_GetPort(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewInteger(r->connection->local_addr->port));
+  Dart_ExitScope();
+}
+
+static void Apache_Response_GetStatusCode(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewInteger(r->status ? r->status : 200));
+  Dart_ExitScope();
+}
+
+static void Apache_Response_SetStatusCode(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_Handle statusHandle = Dart_GetNativeArgument(arguments, 1);
+  int64_t status;
+  Dart_IntegerToInt64(statusHandle, &status);
+  r->status = status;
+  Dart_ExitScope();
+}
+
+static void Apache_Response_SetContentType(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_Handle ctypeHandle = Dart_GetNativeArgument(arguments, 1);
+  if (Dart_IsNull(ctypeHandle)) {
+    r->content_type = "text/plain";
+  } else {
+    const char* ctype;
+    Dart_StringToCString(ctypeHandle, &ctype);
+    r->content_type = apr_pstrdup(r->pool, ctype);
+  }
+  Dart_ExitScope();
+}
+
+static void Apache_Response_GetContentType(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewString(r->content_type));
+  Dart_ExitScope();
+}
+
+static void Apache_Headers_Get(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  apr_table_t *t = get_table(Dart_GetNativeArgument(arguments, 0));
+
+  Dart_Handle name = Dart_GetNativeArgument(arguments, 1);
+  const char* cname;
+  Dart_StringToCString(name, &cname);
+
+  const char* result = apr_table_get(t, cname);
+  Dart_SetReturnValue(arguments, result ? Dart_NewString(result) : Dart_Null());
+  Dart_ExitScope();
+}
+
+static void Apache_Headers_Add(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  apr_table_t *t = get_table(Dart_GetNativeArgument(arguments, 0));
+
+  Dart_Handle name = Dart_GetNativeArgument(arguments, 1);
+  const char* cname;
+  Dart_StringToCString(name, &cname);
+
+  Dart_Handle value = Dart_GetNativeArgument(arguments, 2);
+  const char* cvalue;
+  Dart_StringToCString(value, &cvalue);
+
+  apr_table_add(t, cname, cvalue);
+  Dart_ExitScope();
+}
+
+static void Apache_Headers_Remove(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  apr_table_t *t = get_table(Dart_GetNativeArgument(arguments, 0));
+
+  Dart_Handle name = Dart_GetNativeArgument(arguments, 1);
+  const char* cname;
+  Dart_StringToCString(name, &cname);
+
+  apr_table_unset(t, cname);
+  Dart_ExitScope();
+}
+
+struct iterate_state {
+  Dart_Handle callback;
+  Dart_Handle error;
+};
+
+static int iterate_callback(void *ctx, const char *key, const char *value) {
+  Dart_EnterScope();
+  Dart_Handle args[2] = {Dart_NewString(key), Dart_NewString(value)};
+  struct iterate_state *state = (struct iterate_state*) ctx;
+  Dart_Handle result = Dart_InvokeClosure(state->callback, 2, args);
+  if (Dart_IsError(result)) {
+    state->error = result;
+    return 0; // Don't exit scope, we don't want to lose [result].
+  }
+  Dart_ExitScope();
+  return 1;
+}
+
+static void Apache_Headers_Iterate(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  apr_table_t *t = get_table(Dart_GetNativeArgument(arguments, 0));
+  struct iterate_state state = {Dart_GetNativeArgument(arguments, 1), Dart_Null()};
+  if (!apr_table_do(iterate_callback, &state, t, NULL)) Dart_PropagateError(state.error);
+  Dart_ExitScope();
+}
+
+static void Apache_Request_InitHeaders(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetNativeInstanceField(Dart_GetNativeArgument(arguments, 1), 0, (intptr_t) r->headers_in);
+  Dart_ExitScope();  
+}
+
+static void Apache_Response_InitHeaders(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetNativeInstanceField(Dart_GetNativeArgument(arguments, 1), 0, (intptr_t) r->headers_out);
+  Dart_ExitScope();  
+}
+
 static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   const char* cname;
   if (Dart_IsError(Dart_StringToCString(name, &cname))) return NULL; // not enough context to log!
   if (!strcmp(cname, "Apache_Request_Write") && (args == 2)) return Apache_Request_Write;
   if (!strcmp(cname, "Apache_Request_Flush") && (args == 1)) return Apache_Request_Flush;
+  if (!strcmp(cname, "Apache_Request_InitHeaders") && (args == 2)) return Apache_Request_InitHeaders;
+  if (!strcmp(cname, "Apache_Request_GetHost") && (args == 1)) return Apache_Request_GetHost;
+  if (!strcmp(cname, "Apache_Request_GetPort") && (args == 1)) return Apache_Request_GetPort;
+  if (!strcmp(cname, "Apache_Response_GetStatusCode") && (args == 1)) return Apache_Response_GetStatusCode;
+  if (!strcmp(cname, "Apache_Response_SetStatusCode") && (args == 2)) return Apache_Response_SetStatusCode;
+  if (!strcmp(cname, "Apache_Response_GetContentType") && (args == 1)) return Apache_Response_GetContentType;
+  if (!strcmp(cname, "Apache_Response_SetContentType") && (args == 2)) return Apache_Response_SetContentType;
+  if (!strcmp(cname, "Apache_Response_InitHeaders") && (args == 2)) return Apache_Response_InitHeaders;
+  if (!strcmp(cname, "Apache_Headers_Get") && (args == 2)) return Apache_Headers_Get;
+  if (!strcmp(cname, "Apache_Headers_Add") && (args == 3)) return Apache_Headers_Add;
+  if (!strcmp(cname, "Apache_Headers_Iterate") && (args == 2)) return Apache_Headers_Iterate;
+  if (!strcmp(cname, "Apache_Headers_Remove") && (args == 2)) return Apache_Headers_Remove;
   return NULL;
 }
 
@@ -81,8 +235,12 @@ static Dart_Handle ApacheLibraryLoad() {
   if (Dart_IsError(source)) return source;
   Dart_Handle library = Dart_LoadLibrary(Dart_NewString("dart:apache"), source, Dart_Null());
   if (Dart_IsError(library)) return library;
-  Dart_Handle requestNative = Dart_CreateNativeWrapperClass(library, Dart_NewString("RequestNative"), 1);
-  if (Dart_IsError(requestNative)) return requestNative;
+
+  Dart_Handle wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("RequestNative"), 1);
+  if (Dart_IsError(wrapper)) return wrapper;
+  wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("HeadersNative"), 1);
+  if (Dart_IsError(wrapper)) return wrapper;
+
   Dart_SetNativeResolver(library, NativeResolver);
   return library;  
 }
@@ -94,5 +252,6 @@ extern "C" Dart_Handle ApacheLibraryInit(request_rec *r) {
   Dart_Handle request = Dart_Invoke(library, Dart_NewString("get:request"), 0, NULL);
   if (Dart_IsError(request)) return request;
   Dart_Handle result = Dart_SetNativeInstanceField(request, 0, (intptr_t) r);
+  r->content_type = "text/plain";
   return Dart_IsError(result) ? result : Dart_Null();
 }
