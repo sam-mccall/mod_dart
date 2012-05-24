@@ -49,7 +49,7 @@ static void ThrowIfError(int code, const char* name, request_rec *r) {
   }
 }
 
-static void Apache_Request_Write(Dart_NativeArguments arguments) {
+static void Apache_Response_Write(Dart_NativeArguments arguments) {
   Dart_EnterScope();
   request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
   
@@ -59,6 +59,32 @@ static void Apache_Request_Write(Dart_NativeArguments arguments) {
 
   apr_bucket_brigade *out = apr_brigade_create(r->pool, r->connection->bucket_alloc);
   APR_BRIGADE_INSERT_TAIL(out, apr_bucket_transient_create(ctext, strlen(ctext), out->bucket_alloc));
+  ThrowIfError(ap_pass_brigade(r->output_filters, out), "ap_pass_brigade", r);
+
+  Dart_ExitScope();
+}
+
+static void Apache_Response_WriteList(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  
+  Dart_Handle list = Dart_GetNativeArgument(arguments, 1);
+  Dart_Handle offHandle = Dart_GetNativeArgument(arguments, 2);
+  Dart_Handle lenHandle = Dart_GetNativeArgument(arguments, 3);
+
+  int64_t off, len;
+  Dart_IntegerToInt64(offHandle, &off);
+  Dart_IntegerToInt64(lenHandle, &len);
+
+  uint8_t* ctext = (uint8_t*) malloc(len);
+  Dart_Handle result = Dart_ListGetAsBytes(list, off, ctext, len);
+  if (Dart_IsError(result)) {
+    free(ctext);
+    Dart_PropagateError(result);
+  }
+
+  apr_bucket_brigade *out = apr_brigade_create(r->pool, r->connection->bucket_alloc);
+  APR_BRIGADE_INSERT_TAIL(out, apr_bucket_transient_create((const char*) ctext, len, out->bucket_alloc));
   ThrowIfError(ap_pass_brigade(r->output_filters, out), "ap_pass_brigade", r);
 
   Dart_ExitScope();
@@ -269,7 +295,8 @@ static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   if (Dart_IsError(Dart_StringToCString(name, &cname))) return NULL; // not enough context to log!
   if (!strcmp(cname, "Apache_Connection_IsKeepalive") && (args == 1)) return Apache_Connection_IsKeepalive;
   if (!strcmp(cname, "Apache_Connection_SetKeepalive") && (args == 2)) return Apache_Connection_SetKeepalive;
-  if (!strcmp(cname, "Apache_Request_Write") && (args == 2)) return Apache_Request_Write;
+  if (!strcmp(cname, "Apache_Response_Write") && (args == 2)) return Apache_Response_Write;
+  if (!strcmp(cname, "Apache_Response_WriteList") && (args == 4)) return Apache_Response_WriteList;
   if (!strcmp(cname, "Apache_Request_Flush") && (args == 1)) return Apache_Request_Flush;
   if (!strcmp(cname, "Apache_Request_InitHeaders") && (args == 2)) return Apache_Request_InitHeaders;
   if (!strcmp(cname, "Apache_Request_GetHost") && (args == 1)) return Apache_Request_GetHost;

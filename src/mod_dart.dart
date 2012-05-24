@@ -18,7 +18,8 @@ class _Request extends RequestNative implements HttpRequest {
     _response = new _Response(this);
   }
 
-  _write(s) native 'Apache_Request_Write';
+  _write(s) native 'Apache_Response_Write';
+  _writeList(list, off, len) native 'Apache_Response_WriteList';
   _flush() native 'Apache_Request_Flush';
   get _responseStatusCode() native 'Apache_Response_GetStatusCode';
   set _responseStatusCode(value) native 'Apache_Response_SetStatusCode';
@@ -50,7 +51,7 @@ class _Response {
   String _reasonPhrase;
   _Headers _headers;
   _Response(this._request) {
-    _outputStream = new _OutputStream(_request);
+    _outputStream = new _ResponseOutputStream(_request);
     _reasonPhrase = null;
   }
 
@@ -68,7 +69,7 @@ class _Response {
     return (result == null) ? -1 : result;
   }
   void set contentLength(int value) {
-    if (value is! int) throw new IllegalArgumentException;
+    if (value is! int) throw new IllegalArgumentException();
     _request._setResponseContentLength((value == -1) ? null : value);
   }
 
@@ -93,14 +94,34 @@ class _Response {
   }
 }
 
-class _OutputStream implements OutputStream {
+class _ResponseOutputStream implements OutputStream {
   final _Request _request;
-  _OutputStream(this._request);
+  _ResponseOutputStream(this._request);
 
   bool writeString(String string, [Encoding encoding = Encoding.UTF_8]) {
     if (encoding != Encoding.UTF_8) throw new StreamException("Only UTF_8 is supported");
     _request._write(string.toString());
+    return true;
   }
+
+  flush() => _request._flush();
+
+  bool write(List<int> buffer, [bool copyBuffer = true]) => writeFrom(buffer, 0, buffer.length);
+
+  bool writeFrom(List<int> buffer, [int offset = 0, int len]) {
+    if (len != null) len = buffer.length - offset;
+    if ((offset < 0) || (len < 0) || (offset + len > buffer.length)) {
+      throw new IllegalArgumentException("Out of range: offset=$offset len=$len buffer.length=${buffer.length}");
+    }
+    _request._writeList(buffer, offset, len);
+    return true;
+  }
+
+  void close() => null; // TODO
+  void destroy() => null; // TODO
+  void set onClosed(void callback()) => null; // TODO
+  void set onError(void callback(e)) => null; // TODO
+  void set onNoPendingWrites(void callback()) => null; // TODO
 }
 
 class _Headers extends HeadersNative implements HttpHeaders {
