@@ -1,2 +1,4 @@
+#library('apache');
+
 #import('dart:io');
-sayhello() => stdout.print('hello, world!');
+sayhello() => stdout.writeString('hello, world!\n');
