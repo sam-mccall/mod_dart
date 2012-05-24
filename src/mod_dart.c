@@ -11,7 +11,7 @@
 #include "http_protocol.h"
 #include "ap_config.h"
 
-#define AP_WARN(r, message, ...) ap_log_error(APLOG_MARK, LOG_WARNING, 0, (r)->server, message "\n", ##__VA_ARGS__)
+#define AP_WARN(r, message, ...) ap_log_rerror(APLOG_MARK, LOG_WARNING, 0, r, message "\n", ##__VA_ARGS__)
 
 extern const uint8_t* snapshot_buffer;
 
@@ -26,6 +26,7 @@ typedef struct dart_config {
 } dart_config;
 
 extern module AP_MODULE_DECLARE_DATA dart_module;
+extern "C" Dart_Handle ApacheLibraryInit(request_rec* r);
 
 static bool IsolateCreate(const char* name, void* data, char** error) {
   Dart_Isolate isolate = Dart_CreateIsolate(name, snapshot_buffer, data, error);
@@ -41,7 +42,7 @@ static bool IsolateInterrupt() {
   return true;
 }
 
-static Dart_Handle LoadFile(const char* cpath) {
+Dart_Handle LoadFile(const char* cpath) {
   struct stat status;
   if (stat(cpath, &status)) {
     if (errno == ENOENT) return Dart_Null();
@@ -91,17 +92,15 @@ static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, 
   const char* curl;
   Dart_Handle result = Dart_StringToCString(url, &curl);
   if (Dart_IsError(result)) return result;
-  if (type == kImportTag && !strcmp("dart:apache", curl)) {
-    source = LoadFile("/usr/local/google/home/sammccall/gits/mod_dart/src/mod_dart.dart"); // TODO
-  } else if (strstr(curl, ":")) {
+  if (strstr(curl, ":")) {
     return Dart_Error("Unknown qualified import: %s", curl);
   } else {
     source = LoadFile(curl); // TODO
   }
 
   if (Dart_IsError(source)) return source;
-  if (type == kImportTag) return Dart_LoadLibrary(url, source, import_map);
-  return Dart_LoadSource(library, url, source);
+  if (type == kSourceTag) return Dart_LoadSource(library, url, source);
+  return Dart_LoadLibrary(url, source, import_map);
 }
 
 static bool dart_isolate_create(request_rec *r) {
@@ -112,6 +111,11 @@ static bool dart_isolate_create(request_rec *r) {
   }
   Dart_EnterScope();
   Dart_SetLibraryTagHandler(LibraryTagHandler);
+  Dart_Handle result = ApacheLibraryInit(r);
+  if (Dart_IsError(result)) {
+    AP_WARN(r, "Failed to initialize Apache library: %s", Dart_GetError(result));
+    return false;
+  }
   return true;
 }
 
@@ -169,8 +173,6 @@ static int dart_handler(request_rec *r) {
   }
   dart_isolate_destroy(r);
 
-  r->content_type = "text/plain";
-  if (!r->header_only) ap_rputs("main() executed successfully.\n", r);
   return OK;
 }
 
