@@ -91,6 +91,22 @@ static void Apache_Request_GetPort(Dart_NativeArguments arguments) {
   Dart_ExitScope();
 }
 
+static void Apache_Connection_IsKeepalive(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewBoolean(r->connection->keepalive != AP_CONN_CLOSE));
+  Dart_ExitScope();
+}
+
+static void Apache_Connection_SetKeepalive(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  bool keepalive;
+  Dart_BooleanValue(Dart_GetNativeArgument(arguments, 1), &keepalive);
+  r->connection->keepalive = keepalive ? AP_CONN_KEEPALIVE : AP_CONN_CLOSE;
+  Dart_ExitScope();
+}
+
 static void Apache_Response_GetStatusCode(Dart_NativeArguments arguments) {
   Dart_EnterScope();
   request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
@@ -108,6 +124,27 @@ static void Apache_Response_SetStatusCode(Dart_NativeArguments arguments) {
   Dart_ExitScope();
 }
 
+static void Apache_Response_GetStatusLine(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, r->status_line ? Dart_NewString(r->status_line) : Dart_Null());
+  Dart_ExitScope();
+}
+
+static void Apache_Response_SetStatusLine(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_Handle statusHandle = Dart_GetNativeArgument(arguments, 1);
+  const char* status_line = NULL;
+  if (Dart_IsNull(statusHandle)) {
+    r->status_line = NULL;
+  } else {
+    Dart_StringToCString(statusHandle, &status_line);
+    r->status_line = apr_pstrdup(r->pool, status_line);
+  }
+  Dart_ExitScope();
+}
+
 static void Apache_Response_SetContentType(Dart_NativeArguments arguments) {
   Dart_EnterScope();
   request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
@@ -119,6 +156,23 @@ static void Apache_Response_SetContentType(Dart_NativeArguments arguments) {
     Dart_StringToCString(ctypeHandle, &ctype);
     r->content_type = apr_pstrdup(r->pool, ctype);
   }
+  Dart_ExitScope();
+}
+
+static void Apache_Response_SetContentLength(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_Handle lengthHandle = Dart_GetNativeArgument(arguments, 1);
+  int64_t length = 0;
+  if (!Dart_IsNull(lengthHandle)) Dart_IntegerToInt64(lengthHandle, &length);
+  ap_set_content_length(r, length);
+  Dart_ExitScope();
+}
+
+static void Apache_Response_GetContentLength(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, (r->clength > 0) ? Dart_NewInteger(r->clength) : Dart_Null());
   Dart_ExitScope();
 }
 
@@ -213,6 +267,8 @@ static void Apache_Response_InitHeaders(Dart_NativeArguments arguments) {
 static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   const char* cname;
   if (Dart_IsError(Dart_StringToCString(name, &cname))) return NULL; // not enough context to log!
+  if (!strcmp(cname, "Apache_Connection_IsKeepalive") && (args == 1)) return Apache_Connection_IsKeepalive;
+  if (!strcmp(cname, "Apache_Connection_SetKeepalive") && (args == 2)) return Apache_Connection_SetKeepalive;
   if (!strcmp(cname, "Apache_Request_Write") && (args == 2)) return Apache_Request_Write;
   if (!strcmp(cname, "Apache_Request_Flush") && (args == 1)) return Apache_Request_Flush;
   if (!strcmp(cname, "Apache_Request_InitHeaders") && (args == 2)) return Apache_Request_InitHeaders;
@@ -220,8 +276,12 @@ static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   if (!strcmp(cname, "Apache_Request_GetPort") && (args == 1)) return Apache_Request_GetPort;
   if (!strcmp(cname, "Apache_Response_GetStatusCode") && (args == 1)) return Apache_Response_GetStatusCode;
   if (!strcmp(cname, "Apache_Response_SetStatusCode") && (args == 2)) return Apache_Response_SetStatusCode;
+  if (!strcmp(cname, "Apache_Response_GetStatusLine") && (args == 1)) return Apache_Response_GetStatusLine;
+  if (!strcmp(cname, "Apache_Response_SetStatusLine") && (args == 2)) return Apache_Response_SetStatusLine;
   if (!strcmp(cname, "Apache_Response_GetContentType") && (args == 1)) return Apache_Response_GetContentType;
   if (!strcmp(cname, "Apache_Response_SetContentType") && (args == 2)) return Apache_Response_SetContentType;
+  if (!strcmp(cname, "Apache_Response_GetContentLength") && (args == 1)) return Apache_Response_GetContentLength;
+  if (!strcmp(cname, "Apache_Response_SetContentLength") && (args == 2)) return Apache_Response_SetContentLength;
   if (!strcmp(cname, "Apache_Response_InitHeaders") && (args == 2)) return Apache_Response_InitHeaders;
   if (!strcmp(cname, "Apache_Headers_Get") && (args == 2)) return Apache_Headers_Get;
   if (!strcmp(cname, "Apache_Headers_Add") && (args == 3)) return Apache_Headers_Add;

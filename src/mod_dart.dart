@@ -2,6 +2,8 @@
 
 #import('dart:io');
 
+void print(text) => response.outputStream.writeString("$text\n");
+
 var _request;
 HttpRequest get request() {
   if (_request == null) _request = new _Request();  
@@ -20,8 +22,18 @@ class _Request extends RequestNative implements HttpRequest {
   _flush() native 'Apache_Request_Flush';
   get _responseStatusCode() native 'Apache_Response_GetStatusCode';
   set _responseStatusCode(value) native 'Apache_Response_SetStatusCode';
+  _getResponseStatusLine() native 'Apache_Response_GetStatusLine';
+  _setResponseStatusLine(value) native 'Apache_Response_SetStatusLine';
   _initRequestHeaders(headers) native 'Apache_Request_InitHeaders';
   _initResponseHeaders(headers) native 'Apache_Response_InitHeaders';
+  _getHost() native 'Apache_Request_GetHost';
+  _getPort() native 'Apache_Request_GetPort';
+  _getResponseContentType() native 'Apache_Response_GetContentType';
+  _setResponseContentType(ctype) native 'Apache_Response_SetContentType';
+  _getResponseContentLength() native 'Apache_Response_GetContentLength';
+  _setResponseContentLength(length) native 'Apache_Response_SetContentLength';
+  _isKeepalive() native 'Apache_Connection_IsKeepalive';
+  _setKeepalive(keep) native 'Apache_Connection_SetKeepalive';
 
   get headers() {
     if (_headers == null) {
@@ -35,9 +47,11 @@ class _Request extends RequestNative implements HttpRequest {
 class _Response {
   final Request _request;
   OutputStream _outputStream;
+  String _reasonPhrase;
   _Headers _headers;
   _Response(this._request) {
     _outputStream = new _OutputStream(_request);
+    _reasonPhrase = null;
   }
 
   get outputStream() => _outputStream;
@@ -49,27 +63,33 @@ class _Response {
     return _headers;
   }
 
-  int get contentLength() => -1;
-  void set contentLength(int value) => null; // Ignored for now
+  int get contentLength() {
+    var result = _request._getResponseContentLength();
+    return (result == null) ? -1 : result;
+  }
+  void set contentLength(int value) {
+    if (value is! int) throw new IllegalArgumentException;
+    _request._setResponseContentLength((value == -1) ? null : value);
+  }
 
   DetachedSocket detachSocket() {
     throw new NotImplementedException();
   }
 
-  bool get persistentConnection() => true;
-  void set persistentConnection(bool value) {
-    throw new NotImplementedException();
-  }
+  bool get persistentConnection() => _request._isKeepalive();
+  void set persistentConnection(bool value) => _request._setKeepalive(value == true);
 
-  String get reasonPhrase() => null;
+  String get reasonPhrase() => _reasonPhrase;
   void set reasonPhrase(String value) {
-    throw new NotImplementedException();
+    _reasonPhrase = value;
+    _request._setResponseStatusLine("$statusCode $value");
   }
 
   int get statusCode() => _request._responseStatusCode;
   void set statusCode(int value) {
     if (value is! int) throw new IllegalArgumentException("Status code must be an integer");
     _request._responseStatusCode = value;
+    if (_reasonPhrase) _request._setResponseStatusLine("$value $_reasonPhrase");
   }
 }
 
@@ -179,24 +199,26 @@ class _Headers extends HeadersNative implements HttpHeaders {
 }
 
 class _RequestHeaders extends _Headers {
-  String get host() => _getHost(_request);
+  String get host() => _request._getHost();
   int get port() {
     var host = value('host');
     if (host != null && host.contains(':')) return Math.parseInt(host.substring(host.indexOf(':') + 1));
-    return _getPort(request);
+    return _request._getPort();
   }
-  static _getHost(request) native 'Apache_Request_GetHost';
-  static _getPort(request) native 'Apache_Request_GetPort';
 }
 
 class _ResponseHeaders extends _Headers {
   _ResponseHeaders(request) : super(request);
 
-  ContentType get contentType() => new ContentType.fromString(_getContentType(_request));
-  void set contentType(ContentType type) => _setContentType(_request, type.toString());
+  ContentType get contentType() => new ContentType.fromString(_request._getResponseContentType());
+  void set contentType(ContentType type) => _request._setResponseContentType(type.toString());
   void add(String name, String value) {
     if (name.toLowerCase() == "content-type") {
       _setContentType(_request, value.toString());
+      return;
+    }
+    if (name.toLowerCase() == "content-length") {
+      _setContentType(_request, Math.parseInt(value.toString()));
       return;
     }
     super.add(name, value);
@@ -206,16 +228,20 @@ class _ResponseHeaders extends _Headers {
       _setContentType(_request, null);
       return;
     }
+    if (name.toLowerCase() == "content-length") {
+      _setContentLength(_request, null);
+      return;
+    }
     super.removeAll(name);
   }
 
   void forEach(void f(String name, List<String> values)) {
-    f(name, [contentType.toString()]);
+    f("Content-Type", [contentType.toString()]);
+    var length = _request._response.contentLength;
+    if (length >= 0) f("Content-Length", [length.toString()]);
     super.forEach((name, values) {
-      if (name.toLowerCase() != "content-type") f(name, values);
+      var namelower = name.toLowerCase();
+      if ((namelower != "content-type") && (namelower != "content-length")) f(name, values);
     });
   }
-
-  static _getContentType(_request) native 'Apache_Response_GetContentType';
-  static _setContentType(_request, ctype) native 'Apache_Response_SetContentType';
 }
