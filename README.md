@@ -43,6 +43,21 @@ including basics like `method`, `path`, and `inputStream`.
 
 Date formatting and parsing in `HttpHeaders` is not implemented.
 
+# Apache directives
+
+  * `SetHandler dart .dart`
+    * Tells Apache to process *.dart files with mod_dart
+  * `DartDebug On`
+    * Exceptions and syntax errors will be sent to the browser in addition to the apache error log
+    * The X-Dart-Snapshot header will be set, indicating whether the script was loaded from a VM snapshot
+  * DartSnapshot /path/to/script.dart
+    * The script will be loaded at startup and snapshotted, so it doesn't need to be parsed for every page load
+    * If the snapshot is stale (older than the script's mtime), it will not be used
+  * DartSnapshotForever /path/to/script.dart
+    * Same as DartSnapshot, but doesn't check if the snapshot is stale (and thus avoids one `stat()`)
+
+`DartDebug On`
+
 # Building and installing
 
 You'll need:
