@@ -49,14 +49,11 @@ class _Request extends RequestNative implements HttpRequest {
 }
 
 class _Response {
-  final Request _request;
-  OutputStream _outputStream;
-  String _reasonPhrase;
+  final _request;
+  final _outputStream;
+  var _reasonPhrase;
   _Headers _headers;
-  _Response(this._request) {
-    _outputStream = new _ResponseOutputStream(_request);
-    _reasonPhrase = null;
-  }
+  _Response(request) : _request = request, _outputStream = new _ResponseOutputStream(request);
 
   get outputStream() => _outputStream;
   get headers() {
@@ -98,7 +95,7 @@ class _Response {
 }
 
 class _ResponseOutputStream implements OutputStream {
-  final _Request _request;
+  final _request;
   _ResponseOutputStream(this._request);
 
   bool writeString(String string, [Encoding encoding = Encoding.UTF_8]) {
@@ -128,7 +125,7 @@ class _ResponseOutputStream implements OutputStream {
 }
 
 class _Headers extends HeadersNative implements HttpHeaders {
-  final _Request _request;
+  final _request;
   _Headers(this._request);
 
   List<String> operator [](String name) {
