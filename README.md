@@ -57,5 +57,5 @@ Edit build.config, and at least set `DART_SRC`.
 
 APXS and Apache will be automatically located if they're on your PATH with common names (apxs/apxs2, apache2/httpd). Otherwise set the appropriate variables.
 
-`./build.sh` will build the library, install it, and start apache in debug mode (single-threaded, attached to terminal).
+`./build.sh` will build the library, install it, and restart apache.
 

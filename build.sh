@@ -27,14 +27,9 @@ else
 fi
 
 
-rm src/snapshot_gen.c; ln -s $DART_GEN/snapshot_gen.cc src/snapshot_gen.c
 rm src/mod_dart_gen.c; python $DART_SRC/runtime/tools/create_string_literal.py --output src/mod_dart_gen.c --include 'none' --input_cc src/mod_dart_gen.c.tmpl --var_name "mod_dart_source" src/mod_dart.dart
-$APXS -S CC=g++ -c -o mod_dart.so -Wc,-Wall -Wc,-Werror -I $DART_SRC/runtime -lstdc++ \
--Wl,-Wl$LIBRARY_GROUP_START,$DART_LIB/libdart_export.a,$DART_LIB/libdart_lib_withcore.a,$DART_LIB/libdart_builtin.a,$DART_LIB/libdart_vm.a,$DART_LIB/libjscre.a,$DART_LIB/libdouble_conversion.a$LIBRARY_GROUP_END \
-src/snapshot_gen.c src/mod_dart_gen.c src/apache_library.c src/mod_dart.c && \
+$APXS -S CC=g++ -c -DNDEBUG -o mod_dart.so -Wc,-Wall -Wc,-Werror -I $DART_SRC/runtime -lstdc++ -I $DART_GEN \
+-Wl,-Wl$LIBRARY_GROUP_START,$DART_LIB/libdart_export.a,$DART_LIB/libdart_builtin.a,$DART_LIB/libdart_lib_withcore.a,$DART_LIB/libdart_builtin.a,$DART_LIB/libdart_vm.a,$DART_LIB/libjscre.a,$DART_LIB/libdouble_conversion.a$LIBRARY_GROUP_END \
+src/builtin.c src/mod_dart_gen.c src/apache_library.c src/mod_dart.c && \
 sudo $APXS -i -a -n dart mod_dart.la && \
-sudo APACHE_RUN_USER=`id -un` APACHE_RUN_GROUP=`id -gn` $HTTPD -X
-
-#,dart_vm,dart_lib_withcore,jscre
-
-# TOPOSORT: [libdart, libdart_lib, libdart_withcore]
+sudo apachectl restart

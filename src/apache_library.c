@@ -2,10 +2,6 @@
 // Licensed under the Apache License, Version 2.0 (the "License")
 // You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
-#ifndef DEBUG
-#define NDEBUG
-#endif
-
 #include <stdio.h>
 #include "include/dart_api.h"
 
@@ -322,7 +318,7 @@ static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   return NULL;
 }
 
-static Dart_Handle ApacheLibraryLoad() {
+extern "C" Dart_Handle ApacheLibraryLoad() {
   Dart_Handle library = Dart_LoadLibrary(Dart_NewString("dart:apache"), Dart_NewString(mod_dart_source));
   if (Dart_IsError(library)) return library;
 
@@ -331,17 +327,17 @@ static Dart_Handle ApacheLibraryLoad() {
   wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("HeadersNative"), 1);
   if (Dart_IsError(wrapper)) return wrapper;
 
-  Dart_SetNativeResolver(library, NativeResolver);
   return library;  
 }
 
 extern "C" Dart_Handle ApacheLibraryInit(request_rec *r) {
   Dart_Handle library = Dart_LookupLibrary(Dart_NewString("dart:apache"));
-  if (Dart_IsError(library)) library = ApacheLibraryLoad();
   if (Dart_IsError(library)) return library;
+  Dart_Handle result = Dart_SetNativeResolver(library, NativeResolver);
+  if (Dart_IsError(result)) return result;
   Dart_Handle request = Dart_Invoke(library, Dart_NewString("get:request"), 0, NULL);
   if (Dart_IsError(request)) return request;
-  Dart_Handle result = Dart_SetNativeInstanceField(request, 0, (intptr_t) r);
+  result = Dart_SetNativeInstanceField(request, 0, (intptr_t) r);
   r->content_type = "text/plain";
   return Dart_IsError(result) ? result : Dart_Null();
 }

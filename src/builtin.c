@@ -1,0 +1,7 @@
+#include "bin/builtin.cc"
+#include "builtin_gen.cc"
+#include "io_gen.cc"
+#include "uri_gen.cc"
+#include "utf_gen.cc"
+#include "json_gen.cc"
+#include "crypto_gen.cc"
