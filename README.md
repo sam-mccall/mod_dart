@@ -45,7 +45,7 @@ Date formatting and parsing in `HttpHeaders` is not implemented.
 
 # Apache directives
 
-  * `SetHandler dart .dart`
+  * `AddHandler dart .dart`
     * Tells Apache to process *.dart files with mod_dart
   * `DartDebug On`
     * Exceptions and syntax errors will be sent to the browser in addition to the apache error log
