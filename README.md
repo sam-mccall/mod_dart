@@ -38,10 +38,11 @@ helloworld.dart
 `response` is mostly complete, including `outputStream` and `headers`, see the 
 [dart:io documentation](http://api.dartlang.org/io/HttpRequest.html) for details.
 
-`request` is not yet complete - `headers` works but most other things don't, 
-including basics like `method`, `path`, and `inputStream`.
+`request` is complete, except `inputStream` is not yet implemented.
 
 Date formatting and parsing in `HttpHeaders` is not implemented.
+
+Each request is handled in its own isolate, spawning further isolates is untested and probably doesn't work.
 
 # Apache directives
 

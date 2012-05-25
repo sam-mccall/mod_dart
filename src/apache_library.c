@@ -105,8 +105,10 @@ static void Apache_Request_Flush(Dart_NativeArguments arguments) {
 static void Apache_Request_GetHost(Dart_NativeArguments arguments) {
   Dart_EnterScope();
   request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
-  Dart_SetReturnValue(arguments, Dart_NewString(r->hostname ? r->hostname
+  Dart_SetReturnValue(arguments, Dart_NewString(r->parsed_uri.hostname ? r->parsed_uri.hostname
+    : r->hostname ? r->hostname
     : r->connection->local_host ? r->connection->local_host
+    : r->server->server_hostname ? r->server->server_hostname
     : r->connection->local_ip ? r->connection->local_ip : "localhost"));
   Dart_ExitScope();
 }
@@ -115,6 +117,62 @@ static void Apache_Request_GetPort(Dart_NativeArguments arguments) {
   Dart_EnterScope();
   request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
   Dart_SetReturnValue(arguments, Dart_NewInteger(r->connection->local_addr->port));
+  Dart_ExitScope();
+}
+
+static void Apache_Request_GetProtocolVersion(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewInteger(r->proto_num));
+  Dart_ExitScope();
+}
+
+static void Apache_Request_GetMethod(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewString(r->method));
+  Dart_ExitScope();
+}
+
+static void Apache_Request_GetPath(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, Dart_NewString(r->parsed_uri.path));
+  Dart_ExitScope();
+}
+
+static void Apache_Request_GetQueryString(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_SetReturnValue(arguments, r->parsed_uri.query ? Dart_NewString(r->parsed_uri.query) : Dart_Null());
+  Dart_ExitScope();
+}
+
+static void Apache_Request_GetUri(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 0));
+  Dart_Handle empty = Dart_NewString("");
+  Dart_Handle scheme = Dart_NewString(r->server->server_scheme ? r->server->server_scheme : "http");
+  Dart_Handle userInfo = empty;
+  Dart_Handle host = Dart_NewString(r->parsed_uri.hostname ? r->parsed_uri.hostname
+    : r->hostname ? r->hostname
+    : r->connection->local_host ? r->connection->local_host
+    : r->server->server_hostname ? r->server->server_hostname
+    : r->connection->local_ip ? r->connection->local_ip : "localhost");
+  Dart_Handle port = r->parsed_uri.port_str ? Dart_NewInteger(r->parsed_uri.port) : Dart_NewInteger(0);
+  Dart_Handle path = Dart_NewString(r->parsed_uri.path);
+  Dart_Handle query = r->parsed_uri.query ? Dart_NewString(r->parsed_uri.query) : empty;
+  Dart_Handle fragment = empty;
+
+  Dart_Handle uri_library = Dart_LookupLibrary(Dart_NewString("dart:uri"));
+  if (Dart_IsError(uri_library)) Dart_PropagateError(uri_library);
+  Dart_Handle uri_class = Dart_GetClass(uri_library, Dart_NewString("Uri"));
+  if (Dart_IsError(uri_class)) Dart_PropagateError(uri_class);
+
+  Dart_Handle args[] = {scheme, userInfo, host, port, path, query, fragment};
+  Dart_Handle uri = Dart_New(uri_class, Dart_Null(), 7, args);
+  if (Dart_IsError(uri)) Dart_PropagateError(uri);
+  Dart_SetReturnValue(arguments, Dart_ToString(uri));
   Dart_ExitScope();
 }
 
@@ -302,6 +360,11 @@ static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   if (!strcmp(cname, "Apache_Request_InitHeaders") && (args == 2)) return Apache_Request_InitHeaders;
   if (!strcmp(cname, "Apache_Request_GetHost") && (args == 1)) return Apache_Request_GetHost;
   if (!strcmp(cname, "Apache_Request_GetPort") && (args == 1)) return Apache_Request_GetPort;
+  if (!strcmp(cname, "Apache_Request_GetProtocolVersion") && (args == 1)) return Apache_Request_GetProtocolVersion;
+  if (!strcmp(cname, "Apache_Request_GetMethod") && (args == 1)) return Apache_Request_GetMethod;
+  if (!strcmp(cname, "Apache_Request_GetPath") && (args == 1)) return Apache_Request_GetPath;
+  if (!strcmp(cname, "Apache_Request_GetQueryString") && (args == 1)) return Apache_Request_GetQueryString;
+  if (!strcmp(cname, "Apache_Request_GetUri") && (args == 1)) return Apache_Request_GetUri;
   if (!strcmp(cname, "Apache_Response_GetStatusCode") && (args == 1)) return Apache_Response_GetStatusCode;
   if (!strcmp(cname, "Apache_Response_SetStatusCode") && (args == 2)) return Apache_Response_SetStatusCode;
   if (!strcmp(cname, "Apache_Response_GetStatusLine") && (args == 1)) return Apache_Response_GetStatusLine;

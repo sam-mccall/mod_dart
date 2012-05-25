@@ -4,6 +4,7 @@
 
 #library('apache');
 #import('dart:io');
+#import('dart:uri');
 
 void print(text) => response.outputStream.writeString("$text\n");
 
@@ -17,6 +18,7 @@ HttpResponse get response() => request._response;
 class _Request extends RequestNative implements HttpRequest {
   _Response _response;
   _Headers _headers;
+  Map<String, String> _queryParameters;
   _Request() {
     _response = new _Response(this);
   }
@@ -36,16 +38,49 @@ class _Request extends RequestNative implements HttpRequest {
   _setResponseContentType(ctype) native 'Apache_Response_SetContentType';
   _getResponseContentLength() native 'Apache_Response_GetContentLength';
   _setResponseContentLength(length) native 'Apache_Response_SetContentLength';
-  _isKeepalive() native 'Apache_Connection_IsKeepalive';
   _setKeepalive(keep) native 'Apache_Connection_SetKeepalive';
+  _getProtocolVersion() native 'Apache_Request_GetProtocolVersion';
 
-  get headers() {
+  HttpHeaders get headers() {
     if (_headers == null) {
       _headers = new _RequestHeaders();
       _initRequestHeaders(_headers);
     }
     return _headers;
   }
+
+  bool get persistentConnection() native 'Apache_Connection_IsKeepalive';
+  String get uri() native 'Apache_Request_GetUri';
+  String get queryString() native 'Apache_Request_GetQueryString';
+
+  static _decode(queryPart) => decodeUriComponent(queryPart.replaceAll('+',' '));
+  Map<String, String> get queryParameters() {
+    if (_queryParameters == null) {
+      var text = queryString;
+      _queryParameters = new Map<String, String>();
+      if (text != null) text.split("&").forEach((token) {
+        if (token.isEmpty()) return;
+        var index = token.indexOf('=');
+        if (index < 0) {
+          _queryParameters[_decode(token)] = null;
+        } else {
+          _queryParameters[_decode(token.substring(0, index))] = _decode(token.substring(index+1));
+        }
+      });
+    }
+    return _queryParameters;
+  }
+  String get path() native 'Apache_Request_GetPath';
+  String get method() native 'Apache_Request_GetMethod';
+  String get protocolVersion() {
+    var num = _getProtocolVersion();
+    return "${(num/1000).toInt()}.${num%1000}";
+  }
+  int get contentLength() {
+    var lengthText = headers.value('Content-Length');
+    return (lengthText == null) ? -1 : Math.parseInt(lengthText);
+  }
+  InputStream get inputStream() => null;
 }
 
 class _Response {
@@ -77,7 +112,7 @@ class _Response {
     throw new NotImplementedException();
   }
 
-  bool get persistentConnection() => _request._isKeepalive();
+  bool get persistentConnection() => _request.persistentConnection;
   void set persistentConnection(bool value) => _request._setKeepalive(value == true);
 
   String get reasonPhrase() => _reasonPhrase;
