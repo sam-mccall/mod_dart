@@ -15,15 +15,7 @@
 #include "apr_hash.h"
 #include "apr_strings.h"
 
-#define AP_WARN(r, message, ...) do{\
-  struct timeval tv;\
-  gettimeofday(&tv, NULL);\
-  fprintf(stderr, "At %ld.%06d\n", tv.tv_sec, tv.tv_usec);\
-  ap_log_rerror(APLOG_MARK, LOG_WARNING, 0, r, message, ##__VA_ARGS__);\
-} while(0)
-
 extern const uint8_t* snapshot_buffer; // corelib, dart:io etc
-static uint8_t *master_snapshot_buffer = 0; // snapshot_buffer + dart:apache
 
 typedef enum {
   kNull = 0,
@@ -35,8 +27,15 @@ typedef struct dart_dir_config {
   NullableBool debug;
 } dart_dir_config;
 
+typedef struct dart_snapshot {
+  uint8_t *buffer;
+  time_t mtime;
+  bool validate;
+} dart_snapshot;
+
 typedef struct dart_server_config {
   dart_server_config *base;
+  dart_snapshot master_snapshot;
   apr_hash_t *snapshots;
 } dart_server_config;
 
@@ -45,11 +44,18 @@ extern "C" Dart_Handle ApacheLibraryInit(request_rec* r);
 extern "C" Dart_Handle ApacheLibraryLoad();
 
 static bool IsolateCreate(const char* name, const char* main, void* data, char** error) {
-  if (!master_snapshot_buffer) {
-    *((const char**) error) = "master_snapshot_buffer == NULL";
+  request_rec *r = (request_rec*) data;
+  if (!r) {
+    *((const char**) error) = "Tried to spawn an isolate with no request (during snapshot phase?)";
     return false;
   }
-  Dart_Isolate isolate = Dart_CreateIsolate(name, main, master_snapshot_buffer, data, error);
+  dart_server_config *cfg = (dart_server_config*) ap_get_module_config(r->server->module_config, &dart_module);
+  while (cfg->base) cfg = cfg->base;
+  if (!cfg->master_snapshot.buffer) {
+    *((const char**) error) = "dart_server_config.master_snapshot.buffer == NULL";
+    return false;
+  }
+  Dart_Isolate isolate = Dart_CreateIsolate(name, main, cfg->master_snapshot.buffer, data, error);
   if (!isolate) return false;
   Dart_EnterScope();
   Builtin::SetNativeResolver(Builtin::kBuiltinLibrary);
@@ -62,12 +68,13 @@ static bool IsolateInterrupt() {
   return true;
 }
 
-Dart_Handle LoadFile(const char* cpath) {
+Dart_Handle LoadFile(const char* cpath, struct stat *status_ptr) {
   struct stat status;
   if (stat(cpath, &status)) {
     if (errno == ENOENT) return Dart_Null();
     return Dart_Error("Couldn't stat %s: %s", cpath, strerror(errno));
   }
+  if (status_ptr) *status_ptr = status;
 
   if (!status.st_size) return Dart_NewString("");
 
@@ -115,7 +122,7 @@ static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, 
   if (strstr(curl, ":")) {
     return Dart_Error("Unknown qualified import: %s", curl);
   } else {
-    source = LoadFile(curl); // TODO
+    source = LoadFile(curl, NULL); // TODO
   }
 
   if (Dart_IsError(source)) return source;
@@ -161,15 +168,15 @@ static Dart_Handle ScriptSnapshotLibraryTagHandler(Dart_LibraryTag type, Dart_Ha
 
 static bool dart_isolate_create(request_rec *r) {
   char* error;
-  if (!IsolateCreate("name", "main", NULL, &error)) {
-    AP_WARN(r, "Failed to create isolate: %s", error);
+  if (!IsolateCreate("name", "main", (void*) r, &error)) {
+    ap_log_rerror(APLOG_MARK, LOG_WARNING, 0, r, "Failed to create isolate: %s", error);
     return false;
   }
   Dart_EnterScope();
   Dart_SetLibraryTagHandler(LibraryTagHandler);
   Dart_Handle result = ApacheLibraryInit(r);
   if (Dart_IsError(result)) {
-    AP_WARN(r, "Failed to initialize Apache library: %s", Dart_GetError(result));
+    ap_log_rerror(APLOG_MARK, LOG_WARNING, 0, r, "Failed to initialize Apache library: %s", Dart_GetError(result));
     return false;
   }
   return true;
@@ -181,18 +188,36 @@ static apr_status_t dart_isolate_destroy(void* ctx) {
   return OK;
 }
 
-static uint8_t *getScriptSnapshot(request_rec *r) {
-  dart_server_config *cfg = (dart_server_config*) ap_get_module_config(r->server->module_config, &dart_module);
-  while (cfg->base) cfg = cfg->base;
-//  printf("Looking up snapshot for %s\n", r->filename);
-  void* result = apr_hash_get(cfg->snapshots, r->filename, APR_HASH_KEY_STRING);
-//  printf("Result was %p\n", result);
-  return (uint8_t*) result;
+static bool isCurrent(char* filename, dart_snapshot *snapshot) {
+  if (!snapshot->validate) return true;
+  struct stat status;
+  if (stat(filename, &status)) return false;
+  return snapshot->mtime >= status.st_mtime;
 }
 
 static bool isDebug(request_rec *r) {
   dart_dir_config *cfg = (dart_dir_config*) ap_get_module_config(r->per_dir_config, &dart_module);
   return cfg->debug == kYes;
+}
+
+static dart_snapshot *getScriptSnapshot(request_rec *r) {
+  dart_server_config *cfg = (dart_server_config*) ap_get_module_config(r->server->module_config, &dart_module);
+  while (cfg->base) cfg = cfg->base;
+  dart_snapshot* result = (dart_snapshot*) apr_hash_get(cfg->snapshots, r->filename, APR_HASH_KEY_STRING);
+  if (!result) {
+    if (isDebug(r)) apr_table_set(r->headers_out, "X-Dart-Snapshot", "No; None configured");
+    return NULL;
+  }
+  if (!result->buffer) {
+    if (isDebug(r)) apr_table_set(r->headers_out, "X-Dart-Snapshot", "No; Failed to create snapshot at startup");
+    return NULL;
+  }
+  if (!isCurrent(r->filename, result)) {
+    if (isDebug(r)) apr_table_set(r->headers_out, "X-Dart-Snapshot", "No; Snapshot is stale");
+    return NULL;
+  }
+  if (isDebug(r)) apr_table_set(r->headers_out, "X-Dart-Snapshot", "Yes");
+  return result;
 }
 
 static bool initializeState = false;
@@ -202,7 +227,7 @@ static void dart_child_init(apr_pool_t *p, server_rec *s) {
 }
 
 static int fatal(request_rec *r, const char *format, Dart_Handle error) {
-  AP_WARN(r, format, Dart_GetError(error));
+  ap_log_rerror(APLOG_MARK, LOG_WARNING, 0, r, format, Dart_GetError(error));
   if (!isDebug(r)) return HTTP_INTERNAL_SERVER_ERROR;
   r->content_type = "text/plain";
   r->status = HTTP_INTERNAL_SERVER_ERROR;
@@ -212,40 +237,31 @@ static int fatal(request_rec *r, const char *format, Dart_Handle error) {
 }
 
 static int dart_handler(request_rec *r) {
-  AP_WARN(r, "Got request");
   if (strcmp(r->handler, "dart")) {
     return DECLINED;
   }
   if (!initializeState) {
-    AP_WARN(r, "Failed to initialize dart VM");  
+    ap_log_rerror(APLOG_MARK, LOG_WARNING, 0, r, "Failed to initialize dart VM at startup");
     return HTTP_INTERNAL_SERVER_ERROR;
   }
-  AP_WARN(r, "Creating isolate");
   if (!dart_isolate_create(r)) return HTTP_INTERNAL_SERVER_ERROR;
   apr_pool_cleanup_register(r->pool, NULL, dart_isolate_destroy, apr_pool_cleanup_null);
-  AP_WARN(r, "Created isolate");
-  uint8_t *snapshot = getScriptSnapshot(r);
+  dart_snapshot *snapshot = getScriptSnapshot(r);
   Dart_Handle library;
   if (snapshot) {
-    library = Dart_LoadScriptFromSnapshot(snapshot); // TODO did we need to load the main snapshot?
+    library = Dart_LoadScriptFromSnapshot(snapshot->buffer); // TODO did we need to load the main snapshot?
   } else {
-    Dart_Handle script = LoadFile(r->filename);
-    AP_WARN(r, "Loaded script file");
+    Dart_Handle script = LoadFile(r->filename, NULL);
     if (Dart_IsNull(script)) return HTTP_NOT_FOUND;
     library = Dart_IsError(script) ? script : Dart_LoadScript(Dart_NewString("main"), script);
   }
-  AP_WARN(r, "Loaded script into VM");
   if (Dart_IsError(library)) return fatal(r, "Failed to load script: %s", library);
   Dart_Handle result = Dart_Invoke(library, Dart_NewString("main"), 0, NULL);
-  AP_WARN(r, "Executed script");
   if (Dart_IsError(result)) return fatal(r, "Failed to execute main(): %s", result);
-  AP_WARN(r, "Finished");
   return OK;
 }
 
-Dart_Handle create_master_snapshot(apr_pool_t *pool, uint8_t **target, const char* name) {
-  printf("Creating master snapshot\n");
-
+Dart_Handle create_master_snapshot(apr_pool_t *pool, dart_snapshot *target, const char* name) {
   Dart_SetLibraryTagHandler(MasterSnapshotLibraryTagHandler);
   Dart_Handle result = Builtin::LoadLibrary(Builtin::kBuiltinLibrary);
   if (Dart_IsError(result)) return result;
@@ -255,37 +271,35 @@ Dart_Handle create_master_snapshot(apr_pool_t *pool, uint8_t **target, const cha
   intptr_t size;
   result = Dart_CreateSnapshot(&buffer, &size);
   if (Dart_IsError(result)) return result;
-  *target = (uint8_t*) apr_pcalloc(pool, size); // This lives forever
-  if (!*target) return Dart_Error("Failed to allocate %ld bytes for master snapshot", size);
-  memmove(*target, buffer, size);
-  printf("Created master snapshot\n");
+  target->buffer = (uint8_t*) apr_pcalloc(pool, size); // This lives forever
+  if (!target->buffer) return Dart_Error("Failed to allocate %ld bytes for master snapshot", size);
+  memmove(target->buffer, buffer, size);
+  target->mtime = 0;
+  fprintf(stderr, "mod_dart: Created master snapshot: %ld bytes\n", size);
   return Dart_Null();
 }
 
-Dart_Handle create_script_snapshot(apr_pool_t *pool, uint8_t **target, const char *name) {
+Dart_Handle create_script_snapshot(apr_pool_t *pool, dart_snapshot *target, const char *name) {
   Dart_SetLibraryTagHandler(ScriptSnapshotLibraryTagHandler);
-  Dart_Handle result = LoadFile(name);
-  printf("Loaded script file %s\n", name);
+  struct stat status;
+  Dart_Handle result = LoadFile(name, &status);
   if (Dart_IsNull(result)) return Dart_Error("Script not found: %s", name);
-  printf("and was found\n");
   if (Dart_IsError(result)) return result;
-  printf("And no error\n");
   result = Dart_LoadScript(Dart_NewString("main"), result);
   if (Dart_IsError(result)) return result;
-  printf("And loaded script\n");
   uint8_t *buffer;
   intptr_t size;
   result = Dart_CreateScriptSnapshot(&buffer, &size);
   if (Dart_IsError(result)) return result;
-  printf("and created snapshot");
-  *target = (uint8_t*) apr_pcalloc(pool, size); // This lives forever
-  if (!*target) return Dart_Error("Failed to allocate %ld bytes for snapshot of %s", size, name);
-  memmove(*target, buffer, size);
-  printf("Done with script snapshot: %s\n", name);
+  target->buffer = (uint8_t*) apr_pcalloc(pool, size); // This lives forever
+  if (!target->buffer) return Dart_Error("Failed to allocate %ld bytes for snapshot of %s", size, name);
+  memmove(target->buffer, buffer, size);
+  target->mtime = status.st_mtime;
+  fprintf(stderr, "mod_dart: Created snapshot of %s: %ld bytes\n", name, size);
   return Dart_Null();
 }
 
-bool create_snapshot(apr_pool_t *pool, uint8_t** target, const char* name, uint8_t *base_snapshot, Dart_Handle (*creator)(apr_pool_t *pool, uint8_t **target, const char* name), char **error) {
+bool create_snapshot(apr_pool_t *pool, dart_snapshot* target, const char* name, uint8_t *base_snapshot, Dart_Handle (*creator)(apr_pool_t *pool, dart_snapshot *target, const char* name), char **error) {
   *error = NULL;
   Dart_Isolate isolate = Dart_CreateIsolate(name, "main", base_snapshot, NULL, error);
   if (!isolate) return false;
@@ -294,7 +308,6 @@ bool create_snapshot(apr_pool_t *pool, uint8_t** target, const char* name, uint8
   if (Dart_IsError(result)) *error = apr_pstrdup(pool, Dart_GetError(result));
   Dart_ExitScope();
   Dart_ShutdownIsolate();
-  printf("Tried to create a snapshot for %s, error state=%p\n", name, *error);
   return *error == NULL;
 }
 
@@ -312,20 +325,20 @@ int dart_snapshots(apr_pool_t *pconf, apr_pool_t *plog, apr_pool_t *ptemp, serve
   initializeState = Dart_SetVMFlags(0, NULL) && Dart_Initialize(IsolateCreate, IsolateInterrupt);
 
   char* error;
-  if (!create_snapshot(server->process->pool, &master_snapshot_buffer, "master", NULL, create_master_snapshot, &error)) {
-    ap_log_error(APLOG_MARK, LOG_WARNING, 0, server, "Master snapshot failed: %s", error);
+  if (!create_snapshot(server->process->pool, &(cfg->master_snapshot), "master", NULL, create_master_snapshot, &error)) {
+    ap_log_error(APLOG_MARK, LOG_ERR, 0, server, "mod_dart: Master snapshot failed: %s", error);
     return 1;
   }
-  uint8_t *val;
+  dart_snapshot *val;
   const void *key;
   for (apr_hash_index_t *p = apr_hash_first(ptemp, cfg->snapshots); p; p = apr_hash_next(p)) {
-    apr_hash_this(p, &key, NULL, NULL);
+    apr_hash_this(p, &key, NULL, (void**) &val);
     // TODO use pconf instead of server->process->pool?
-    if (!create_snapshot(server->process->pool, &val, (const char*) key, master_snapshot_buffer, create_script_snapshot, &error)) {
-      ap_log_error(APLOG_MARK, LOG_WARNING, 0, server, "Script snapshot failed for %s: %s", (const char*) key, error);
-      val = NULL;
+    if (!create_snapshot(server->process->pool, val, (const char*) key, cfg->master_snapshot.buffer, create_script_snapshot, &error)) {
+      ap_log_error(APLOG_MARK, LOG_WARNING, 0, server, "mod_dart: Script snapshot failed for %s: %s", (const char*) key, error);
+      val->buffer = NULL;
+      val->mtime = 0;
     }
-    apr_hash_set(cfg->snapshots, key, APR_HASH_KEY_STRING, (const void*) val);
   }
 
   return OK;
@@ -343,17 +356,21 @@ static const char *dart_set_debug(cmd_parms *cmd, void *cfg_, const char *arg) {
   return NULL;
 }
 
-static const char *dart_set_snapshot(cmd_parms *cmd, void *cfg_, const char *arg) {
+static const char *dart_set_snapshot(cmd_parms *cmd, void *cfg_, const char *arg, const char *arg2) {
   dart_server_config *cfg = (dart_server_config*) ap_get_module_config(cmd->server->module_config, &dart_module);
   while (cfg->base) cfg = cfg->base;
-  printf("Adding snapshot for %s\n", arg);
-  apr_hash_set(cfg->snapshots, arg, APR_HASH_KEY_STRING, (void*) 1);
+  dart_snapshot *snapshot = (dart_snapshot *) apr_pcalloc(apr_hash_pool_get(cfg->snapshots), sizeof(dart_snapshot));
+  snapshot->buffer = NULL;
+  snapshot->mtime = 0;
+  snapshot->validate = (bool) cmd->info;
+  apr_hash_set(cfg->snapshots, arg, APR_HASH_KEY_STRING, (void*) snapshot);
   return NULL;
 }
 
 static const command_rec dart_directives[] = {
   AP_INIT_TAKE1("DartDebug", (cmd_func) dart_set_debug, NULL, OR_ALL, "Whether error messages should be sent to the browser"),
-  AP_INIT_TAKE1("DartSnapshot", (cmd_func) dart_set_snapshot, NULL, OR_ALL, "A dart file to be snapshotted for fast loading"),
+  AP_INIT_TAKE1("DartSnapshot", (cmd_func) dart_set_snapshot, (void*) true, OR_ALL, "A dart file to be snapshotted for fast loading"),
+  AP_INIT_TAKE1("DartSnapshotForever", (cmd_func) dart_set_snapshot, (void*) false, OR_ALL, "A dart file to be snapshotted for fast loading"),
   { NULL },
 };
 
@@ -374,7 +391,6 @@ static void *merge_dir_conf(apr_pool_t* pool, void* base_, void* add_) {
 }
 
 static void *create_server_conf(apr_pool_t* pool, server_rec *server) {
-  printf("Creating server config\n");
   dart_server_config *cfg = (dart_server_config*) apr_pcalloc(pool, sizeof(dart_server_config));
   if (cfg) {
     cfg->base = NULL;
@@ -384,7 +400,6 @@ static void *create_server_conf(apr_pool_t* pool, server_rec *server) {
 }
 
 static void *merge_server_conf(apr_pool_t *pool, void *base_, void *add_) {
-  printf("Merging server configs\n");
   dart_server_config *base = (dart_server_config*) base_;
   dart_server_config *add = (dart_server_config*) add_;
   dart_server_config *cfg = (dart_server_config*) apr_pcalloc(pool, sizeof(dart_server_config));
@@ -395,7 +410,6 @@ static void *merge_server_conf(apr_pool_t *pool, void *base_, void *add_) {
   const void *key;
   for (apr_hash_index_t *p = apr_hash_first(pool, add->snapshots); p; p = apr_hash_next(p)) {
     apr_hash_this(p, &key, NULL, &val);
-    printf("Copying key into base: %s\n", (char*) key);
     apr_hash_set(base->snapshots, key, APR_HASH_KEY_STRING, val);
   }
   return cfg;
