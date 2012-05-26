@@ -177,7 +177,7 @@ static Dart_Handle ScriptSnapshotLibraryTagHandler(Dart_LibraryTag type, Dart_Ha
     const char* curl;
     Dart_Handle result = Dart_StringToCString(url, &curl);
     if (Dart_IsError(result)) return result;
-    if (type == kImportTag && !strcmp(curl, "dart:apache")) {
+    if (type == kImportTag && !strcmp(curl, "apache:handler")) {
       return ApacheLibraryLoad();
     } else if (!strstr(curl, ":")) {
       return LibraryTagHandler(type, library, url);

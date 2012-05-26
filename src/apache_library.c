@@ -466,7 +466,7 @@ static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
 }
 
 extern "C" Dart_Handle ApacheLibraryLoad() {
-  Dart_Handle library = Dart_LoadLibrary(Dart_NewString("dart:apache"), Dart_NewString(mod_dart_source));
+  Dart_Handle library = Dart_LoadLibrary(Dart_NewString("apache:handler"), Dart_NewString(mod_dart_source));
   if (Dart_IsError(library)) return library;
 
   Dart_Handle wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("RequestNative"), 1);
@@ -480,7 +480,7 @@ extern "C" Dart_Handle ApacheLibraryLoad() {
 }
 
 extern "C" Dart_Handle ApacheLibraryInit(request_rec *r) {
-  Dart_Handle library = Dart_LookupLibrary(Dart_NewString("dart:apache"));
+  Dart_Handle library = Dart_LookupLibrary(Dart_NewString("apache:handler"));
   if (Dart_IsError(library)) return library;
   Dart_Handle result = Dart_SetNativeResolver(library, NativeResolver);
   if (Dart_IsError(result)) return result;

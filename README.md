@@ -15,7 +15,7 @@ httpd.conf
 
 helloworld.dart
 
-    #import('dart:apache');
+    #import('apache:handler');
     #import('dart:io');
 
     main() {
@@ -30,7 +30,7 @@ helloworld.dart
 
 # APIs provided
 
-`dart:apache` provides top level constants, and a convenience function:
+`apache:handler` provides top level constants, and a convenience function:
 
     final HttpRequest request;
     final HttpResponse response;
