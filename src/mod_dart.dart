@@ -18,6 +18,7 @@ HttpResponse get response() => request._response;
 class _Request extends RequestNative implements HttpRequest {
   _Response _response;
   _Headers _headers;
+  InputStream _inputStream;
   Map<String, String> _queryParameters;
   _Request() {
     _response = new _Response(this);
@@ -49,6 +50,10 @@ class _Request extends RequestNative implements HttpRequest {
     return _headers;
   }
 
+  InputStream get inputStream() {
+    if (_inputStream == null) _inputStream = new _RequestInputStream(this);
+    return _inputStream;
+  }
   bool get persistentConnection() native 'Apache_Connection_IsKeepalive';
   String get uri() native 'Apache_Request_GetUri';
   String get queryString() native 'Apache_Request_GetQueryString';
@@ -80,7 +85,6 @@ class _Request extends RequestNative implements HttpRequest {
     var lengthText = headers.value('Content-Length');
     return (lengthText == null) ? -1 : Math.parseInt(lengthText);
   }
-  InputStream get inputStream() => null;
 }
 
 class _Response {
@@ -154,9 +158,55 @@ class _ResponseOutputStream implements OutputStream {
 
   void close() => null; // TODO
   void destroy() => null; // TODO
-  void set onClosed(void callback()) => null; // TODO
-  void set onError(void callback(e)) => null; // TODO
-  void set onNoPendingWrites(void callback()) => null; // TODO
+  void set onClosed(void callback()) => null;
+  void set onError(void callback(e)) => null;
+  void set onNoPendingWrites(void callback()) => null;
+}
+
+class _RequestInputStream extends RequestInputStreamNative implements InputStream {
+  var _pos, _max;
+  _RequestInputStream(request) : _pos = 0, _max = 0 {
+    _init(request);
+  }
+  int available() => _max - _pos;
+  void close() => null; // TODO
+  bool get closed() => false; // TODO
+  void set onClosed(void callback()) => null;
+  void set onData(void callback()) => null;
+  void set onError(void callback(e)) => null;
+  void pipe(OutputStream out, [bool close = true]) {
+    var buffer = _newByteArray(1024);
+    var count;
+    while ((count = readInto(buffer)) >= 0) out.writeFrom(buffer, 0, count);
+    if (close) out.close();
+  }
+  _init(request) native 'Apache_RequestInputStream_Init';
+  _fillBuffer() {
+    _pos = 0;
+    _max = -1; // in case of exception
+    _max = _nativeRead();
+  }
+  _copyBuffer(target, target_offset, src_offset, length) native 'Apache_RequestInputStream_CopyBuffer';
+  _nativeRead() native 'Apache_RequestInputStream_Read';
+  List<int> read([int len]) {
+    if (_pos == _max) _fillBuffer();
+    if (_max < 0) return null;
+    var count = (len == null) ? available() : Math.min(len, available());
+    var result = _newByteArray(count);
+    _copyBuffer(result, 0, _pos, count);
+    _pos += count;
+    return result;
+  }
+  int readInto(List<int> target, [int offset = 0, int len]) {
+    if (_pos == _max) _fillBuffer();
+    if (_max < 0) return 0;
+    if (len == null) len = target.length - offset;
+    var count = Math.min(len, available());
+    _copyBuffer(target, offset, _pos, count);
+    _pos += count;
+    return count;
+  }
+  static _newByteArray(len) native 'Apache_NewByteArray';
 }
 
 class _Headers extends HeadersNative implements HttpHeaders {

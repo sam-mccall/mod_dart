@@ -35,12 +35,12 @@ helloworld.dart
     final HttpResponse response;
     void print(s) => response.outputStream.writeString(s.toString());
 
-`response` is mostly complete, including `outputStream` and `headers`, see the 
-[dart:io documentation](http://api.dartlang.org/io/HttpRequest.html) for details.
+The `HttpRequest` and `HttpResponse` emulation is mostly complete, see the [dart:io documentation](http://api.dartlang.org/io/HttpRequest.html) for details.
 
-`request` is complete, except `inputStream` is not yet implemented.
+The major difference is that `InputStream` and `OutputStream` are *blocking*. This means InputStream.read will 
+always return data unless end-of-stream has been reached, and registered listeners (onData, onError, etc) will never fire.
 
-Date formatting and parsing in `HttpHeaders` is not implemented.
+Date formatting and parsing in `HttpHeaders` is not yet implemented.
 
 Each request is handled in its own isolate, spawning further isolates is untested and probably doesn't work.
 

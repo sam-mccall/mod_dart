@@ -17,6 +17,13 @@
 extern Dart_Handle LoadFile(const char* cpath);
 extern const char *mod_dart_source;
 
+typedef struct {
+  request_rec *request;
+  apr_bucket_brigade *brigade;
+  uint8_t *buffer;
+  bool eos;
+} dart_stream;
+
 static void Throw(const char* library, const char* exception, const char* message) {
   Dart_Handle lib = Dart_LookupLibrary(Dart_NewString(library));
   if (Dart_IsError(lib)) Dart_PropagateError(lib);
@@ -33,6 +40,13 @@ static request_rec *get_request(Dart_Handle request) {
   Dart_GetNativeInstanceField(request, 0, &rptr);
   if (!rptr) Throw("dart:core", "Exception", "request.record_rec was NULL!");
   return (request_rec*) rptr;
+}
+
+static dart_stream *get_stream(Dart_Handle streamHandle) {
+  intptr_t sptr;
+  Dart_GetNativeInstanceField(streamHandle, 0, &sptr);
+  if (!sptr) Throw("dart:core", "Exception", "stream.dart_stream was NULL!");
+  return (dart_stream*) sptr;
 }
 
 static apr_table_t *get_table(Dart_Handle headers) {
@@ -349,6 +363,72 @@ static void Apache_Response_InitHeaders(Dart_NativeArguments arguments) {
   Dart_ExitScope();  
 }
 
+#define DART_INPUT_BUFFER_SIZE 4096
+static void Apache_RequestInputStream_Init(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  Dart_Handle streamHandle = Dart_GetNativeArgument(arguments, 0);
+  request_rec *r = get_request(Dart_GetNativeArgument(arguments, 1));
+  dart_stream *stream = (dart_stream*) apr_pcalloc(r->pool, sizeof(dart_stream));
+  stream->request = r;
+  stream->brigade = apr_brigade_create(r->pool, r->connection->bucket_alloc);
+  stream->buffer = (uint8_t*) apr_pcalloc(r->pool, DART_INPUT_BUFFER_SIZE);
+  stream->eos = false;
+  Dart_SetNativeInstanceField(streamHandle, 0, (intptr_t) stream);
+  ThrowIfError(ap_get_brigade(stream->request->input_filters, stream->brigade, AP_MODE_READBYTES, APR_BLOCK_READ, DART_INPUT_BUFFER_SIZE),
+    "ap_get_brigade", stream->request);
+  Dart_ExitScope();
+}
+
+static void Apache_RequestInputStream_Read(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  dart_stream *stream = get_stream(Dart_GetNativeArgument(arguments, 0));
+  if (stream->eos) {
+    Dart_SetReturnValue(arguments, Dart_NewInteger(-1));    
+  } else if (APR_BRIGADE_EMPTY(stream->brigade)) {
+    printf("Brigade empty!\n");
+    Dart_SetReturnValue(arguments, Dart_Null());
+  } else {
+    apr_bucket *bucket = APR_BRIGADE_FIRST(stream->brigade);
+    if (APR_BUCKET_IS_EOS(bucket)) {
+      stream->eos = true;
+      Dart_SetReturnValue(arguments, Dart_NewInteger(-1));
+    } else {
+      const char *data;
+      apr_size_t data_len;
+      ThrowIfError(apr_bucket_read(bucket, &data, &data_len, APR_BLOCK_READ), "apr_bucket_read", stream->request);
+      memmove(stream->buffer, data, data_len);
+      Dart_SetReturnValue(arguments, Dart_NewInteger(data_len));
+      apr_bucket_delete(bucket);
+    }
+  }
+  Dart_ExitScope();  
+}
+
+static void Apache_RequestInputStream_CopyBuffer(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  dart_stream *stream = get_stream(Dart_GetNativeArgument(arguments, 0));
+  Dart_Handle array = Dart_GetNativeArgument(arguments, 1);
+  Dart_Handle tOffsetHandle = Dart_GetNativeArgument(arguments, 2);
+  Dart_Handle sOffsetHandle = Dart_GetNativeArgument(arguments, 3);
+  Dart_Handle lengthHandle = Dart_GetNativeArgument(arguments, 4);
+  int64_t t_offset, s_offset, length;
+  Dart_IntegerToInt64(tOffsetHandle, &t_offset);
+  Dart_IntegerToInt64(sOffsetHandle, &s_offset);
+  Dart_IntegerToInt64(lengthHandle, &length);
+  Dart_Handle result = Dart_ListSetAsBytes(array, t_offset, &(stream->buffer[s_offset]), length);
+  if (Dart_IsError(result)) Dart_PropagateError(result);
+  Dart_ExitScope();
+}
+
+static void Apache_NewByteArray(Dart_NativeArguments arguments) {
+  Dart_EnterScope();
+  Dart_Handle lengthHandle = Dart_GetNativeArgument(arguments, 0);
+  int64_t length;
+  Dart_IntegerToInt64(lengthHandle, &length);
+  Dart_SetReturnValue(arguments, Dart_NewByteArray(length));
+  Dart_ExitScope();
+}
+
 static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   const char* cname;
   if (Dart_IsError(Dart_StringToCString(name, &cname))) return NULL; // not enough context to log!
@@ -365,6 +445,10 @@ static Dart_NativeFunction NativeResolver(Dart_Handle name, int args) {
   if (!strcmp(cname, "Apache_Request_GetPath") && (args == 1)) return Apache_Request_GetPath;
   if (!strcmp(cname, "Apache_Request_GetQueryString") && (args == 1)) return Apache_Request_GetQueryString;
   if (!strcmp(cname, "Apache_Request_GetUri") && (args == 1)) return Apache_Request_GetUri;
+  if (!strcmp(cname, "Apache_RequestInputStream_Init") && (args == 2)) return Apache_RequestInputStream_Init;  
+  if (!strcmp(cname, "Apache_RequestInputStream_Read") && (args == 1)) return Apache_RequestInputStream_Read;  
+  if (!strcmp(cname, "Apache_RequestInputStream_CopyBuffer") && (args == 5)) return Apache_RequestInputStream_CopyBuffer;  
+  if (!strcmp(cname, "Apache_NewByteArray") && (args == 1)) return Apache_NewByteArray;  
   if (!strcmp(cname, "Apache_Response_GetStatusCode") && (args == 1)) return Apache_Response_GetStatusCode;
   if (!strcmp(cname, "Apache_Response_SetStatusCode") && (args == 2)) return Apache_Response_SetStatusCode;
   if (!strcmp(cname, "Apache_Response_GetStatusLine") && (args == 1)) return Apache_Response_GetStatusLine;
@@ -388,6 +472,8 @@ extern "C" Dart_Handle ApacheLibraryLoad() {
   Dart_Handle wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("RequestNative"), 1);
   if (Dart_IsError(wrapper)) return wrapper;
   wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("HeadersNative"), 1);
+  if (Dart_IsError(wrapper)) return wrapper;
+  wrapper = Dart_CreateNativeWrapperClass(library, Dart_NewString("RequestInputStreamNative"), 1);
   if (Dart_IsError(wrapper)) return wrapper;
 
   return library;  

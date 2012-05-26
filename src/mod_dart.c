@@ -249,7 +249,7 @@ static int dart_handler(request_rec *r) {
   dart_snapshot *snapshot = getScriptSnapshot(r);
   Dart_Handle library;
   if (snapshot) {
-    library = Dart_LoadScriptFromSnapshot(snapshot->buffer); // TODO did we need to load the main snapshot?
+    library = Dart_LoadScriptFromSnapshot(snapshot->buffer);
   } else {
     Dart_Handle script = LoadFile(r->filename, NULL);
     if (Dart_IsNull(script)) return HTTP_NOT_FOUND;
