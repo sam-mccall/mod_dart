@@ -7,6 +7,7 @@ Highly experimental, probably broken and insecure - proceed with caution :-)
 
 httpd.conf
 
+    LoadModule dart_module libexec/apache2/mod_dart.so
     <Location />
       AddHandler dart .dart
       DartDebug on
@@ -46,6 +47,8 @@ Each request is handled in its own isolate, spawning further isolates is unteste
 
 # Apache directives
 
+  * `LoadModule dart_module libexec/apache2/mod_dart.so` (or similar)
+    * Load mod_dart
   * `AddHandler dart .dart`
     * Tells Apache to process *.dart files with mod_dart
   * `DartDebug On`
