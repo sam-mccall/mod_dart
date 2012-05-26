@@ -65,11 +65,27 @@ You'll need:
   * python
   * Apache2, installed and configured
   * The apache2-dev bits (apxs and the headers)
-  * Dart sources, built for the same arch as apache (x64 or ia32)
+  * Dart sources
+
+First, build the Dart VM for the architecture (must match Apache):
+
+    dart/runtime $ ../tools/build.py -m release --arch x64
 
 Edit build.config, and at least set `DART_SRC`.
-
-APXS and Apache will be automatically located if they're on your PATH with common names (apxs/apxs2, apache2/httpd). Otherwise set the appropriate variables.
+APXS and Apache will be automatically located if they're on your PATH with common names (apxs/apxs2, apache2/httpd).
+Otherwise set the appropriate variables.
 
 `./build.sh` will build the library, install it, and restart apache.
 
+# Legal stuff
+Copyright 2012 Google Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
