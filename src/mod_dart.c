@@ -111,6 +111,17 @@ Dart_Handle LoadFile(const char* cpath, struct stat *status_ptr) {
   return result;
 }
 
+// Returns a malloc'd string
+static char* merge_paths(const char* root, const char* relative) {
+  if (*relative == '/') return strdup(relative);
+  int pos = strlen(root);
+  while ((pos > 0) && (root[pos-1] != '/')) pos--;
+  char* result = (char*) malloc(pos + strlen(relative) + 1);
+  memmove(result, root, pos);
+  memmove(&(result[pos]), relative, strlen(relative) + 1); // include 0
+  return result;
+}
+
 static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, Dart_Handle url) {
   if (type == kCanonicalizeUrl) return url;
   if (type == kLibraryTag) return Dart_Null();
@@ -122,7 +133,14 @@ static Dart_Handle LibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, 
   if (strstr(curl, ":")) {
     return Dart_Error("Unknown qualified import: %s", curl);
   } else {
-    source = LoadFile(curl, NULL); // TODO
+    const char* root_url;
+    result = Dart_StringToCString(Dart_LibraryUrl(library), &root_url);
+    if (Dart_IsError(result)) return result;
+    char* path = merge_paths(root_url, curl);
+    source = LoadFile(path, NULL);
+    if (Dart_IsNull(source)) source = Dart_Error("File %s was not found\n", curl);
+    free(path);
+    if (Dart_IsError(source)) return source;
   }
 
   if (Dart_IsError(source)) return source;
@@ -155,12 +173,14 @@ static Dart_Handle MasterSnapshotLibraryTagHandler(Dart_LibraryTag type, Dart_Ha
 }
 
 static Dart_Handle ScriptSnapshotLibraryTagHandler(Dart_LibraryTag type, Dart_Handle library, Dart_Handle url) {
-  if (type == kImportTag) {
+  if (type == kImportTag || type == kSourceTag) {
     const char* curl;
     Dart_Handle result = Dart_StringToCString(url, &curl);
     if (Dart_IsError(result)) return result;
-    if (!strcmp(curl, "dart:apache")) {
+    if (type == kImportTag && !strcmp(curl, "dart:apache")) {
       return ApacheLibraryLoad();
+    } else if (!strstr(curl, ":")) {
+      return LibraryTagHandler(type, library, url);
     }
   }
   return MasterSnapshotLibraryTagHandler(type, library, url);
@@ -253,7 +273,7 @@ static int dart_handler(request_rec *r) {
   } else {
     Dart_Handle script = LoadFile(r->filename, NULL);
     if (Dart_IsNull(script)) return HTTP_NOT_FOUND;
-    library = Dart_IsError(script) ? script : Dart_LoadScript(Dart_NewString("main"), script);
+    library = Dart_IsError(script) ? script : Dart_LoadScript(Dart_NewString(r->filename), script);
   }
   if (Dart_IsError(library)) return fatal(r, "Failed to load script: %s", library);
   Dart_Handle result = Dart_Invoke(library, Dart_NewString("main"), 0, NULL);
@@ -285,7 +305,7 @@ Dart_Handle create_script_snapshot(apr_pool_t *pool, dart_snapshot *target, cons
   Dart_Handle result = LoadFile(name, &status);
   if (Dart_IsNull(result)) return Dart_Error("Script not found: %s", name);
   if (Dart_IsError(result)) return result;
-  result = Dart_LoadScript(Dart_NewString("main"), result);
+  result = Dart_LoadScript(Dart_NewString(name), result);
   if (Dart_IsError(result)) return result;
   uint8_t *buffer;
   intptr_t size;
