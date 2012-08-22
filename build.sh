@@ -21,8 +21,8 @@ else
   if [[ "$UNAME" != "Linux" ]]; then
     echo "Warning: Unrecognized OS $UNAME, this likely won't work"
   fi
-  DART_LIB=$DART_SRC/out/${DART_MODE}$DART_ARCH/obj.target/runtime
-  DART_GEN=$DART_SRC/out/${DART_MODE}$DART_ARCH/obj/gen
+  DART_LIB=$DART_SRC/runtime/out/${DART_MODE}$DART_ARCH/obj.target/runtime
+  DART_GEN=$DART_SRC/runtime/out/${DART_MODE}$DART_ARCH/obj/gen
   LIBRARY_GROUP_START=,--start-group # dart static libraries have circular references
   LIBRARY_GROUP_END=,--end-group
   WEB_GEN=$DART_LIB/../dart/gen/web_gen.o
