@@ -5,4 +5,6 @@
 const char {{VAR_NAME}}_[] = {
   {{DART_SOURCE}}
 };
-extern "C" const char* {{VAR_NAME}} = {{VAR_NAME}}_;
+extern "C" {
+  const char* {{VAR_NAME}} = {{VAR_NAME}}_;
+}
